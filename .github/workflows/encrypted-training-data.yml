@@ -1,0 +1,87 @@
+name: Encrypted Training Data Collection
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Completed race date YYYY-MM-DD (blank = yesterday JST)"
+        required: false
+        type: string
+      max_races:
+        description: "Pilot limit (haruqube only); 0 = complete day"
+        required: false
+        default: "0"
+        type: string
+  schedule:
+    - cron: "29 21 * * *" # 06:29 JST, yesterday's result day
+
+permissions:
+  contents: write
+
+concurrency:
+  group: encrypted-training-data
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      COLLECTION_KEY: ${{ secrets.COLLECTOR_PASSPHRASE }}
+      DATE_INPUT: ${{ inputs.target_date }}
+      MAX_RACES_INPUT: ${{ inputs.max_races }}
+      GH_TOKEN: ${{ github.token }}
+      KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Refuse to collect without an encryption secret
+        shell: bash
+        run: |
+          if [ "${#COLLECTION_KEY}" -lt 32 ]; then
+            echo "::error::Add COLLECTOR_PASSPHRASE (32+ random chars) in GitHub Actions Secrets."
+            exit 1
+          fi
+      - name: Install collection dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml pandas numpy click python-dotenv
+      - name: Collect one isolated day
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_DATE="$DATE_INPUT"
+          if [ -z "$RUN_DATE" ]; then
+            RUN_DATE="$(TZ=Asia/Tokyo date -d 'yesterday' +%F)"
+          fi
+          echo "RUN_DATE=$RUN_DATE" >> "$GITHUB_ENV"
+          python scripts/collect_training_day.py --date "$RUN_DATE"
+      - name: Encrypt SQLite before any upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p encrypted
+          ARCHIVE="encrypted/winticket-$RUN_DATE.sqlite.gpg"
+          printf %s "$COLLECTION_KEY" | gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-fd 0 --symmetric --cipher-algo AES256 \
+            --output "$ARCHIVE" data/keirin.db
+          test -s "$ARCHIVE"
+      - name: Store encrypted shard in a monthly GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="training-data-$(echo "$RUN_DATE" | cut -c1-7)"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" \
+              --title "Encrypted training data $TAG" \
+              --notes "Encrypted daily SQLite shards only; keep the secret offline."
+          fi
+          gh release upload "$TAG" encrypted/*.gpg --clobber
+      - name: Save non-sensitive audit counts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collection-report-${{ github.run_number }}
+          path: collection_report.json
+          if-no-files-found: ignore
+          retention-days: 30
