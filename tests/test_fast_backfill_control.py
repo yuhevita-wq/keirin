@@ -33,8 +33,14 @@ class FastBackfillTests(unittest.TestCase):
             results = root / "downloaded" / "shards" / "shard-0"
             results.mkdir(parents=True)
             summary = {"days": [
-                {"date": "2023-01-01", "status": "complete"},
-                {"date": "2023-01-02", "status": "partial"},
+                {"date": "2023-01-01", "status": "complete",
+                 "races": 70, "entries": 490, "results": 480,
+                 "source_report": {"odds": 24000, "missing_odds_races": 0,
+                                   "odds_by_bet_type": {"trifecta": 18000}}},
+                {"date": "2023-01-02", "status": "partial",
+                 "races": 65, "entries": 450, "results": 420,
+                 "source_report": {"odds": 20000, "missing_odds_races": 2,
+                                   "odds_by_bet_type": {"trifecta": 15000}}},
             ]}
             (results / "backfill_summary.json").write_text(json.dumps(summary), encoding="utf-8")
             args = type("Args", (), {
@@ -50,6 +56,11 @@ class FastBackfillTests(unittest.TestCase):
             self.assertEqual(new["days_archived"], 2)
             self.assertEqual(new["days_partial"], 1)
             self.assertEqual(new["failed_dates"], ["2023-01-03"])
+            self.assertEqual(new["last_batch"]["races"], 135)
+            self.assertEqual(new["last_batch"]["odds"], 44000)
+            self.assertEqual(new["last_batch"]["missing_odds_races"], 2)
+            self.assertEqual(new["metrics_since_2026_10_22_upgrade"]["odds"], 44000)
+            self.assertEqual(new["metrics_since_2026_10_22_upgrade"]["odds_by_bet_type"]["trifecta"], 33000)
 
 
 if __name__ == "__main__":
