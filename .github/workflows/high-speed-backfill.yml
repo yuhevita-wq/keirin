@@ -1,0 +1,212 @@
+name: High-Speed Fresh Historical Data Collection
+
+on:
+  push:
+    paths:
+      - ".github/workflows/high-speed-backfill.yml"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Optional manual retry start YYYY-MM-DD; blank resumes"
+        type: string
+        required: false
+  schedule:
+    - cron: "15 1,13 * * *" # 10:15 / 22:15 JST fallback schedule
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: high-speed-fresh-backfill
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      active: ${{ steps.plan.outputs.active }}
+      batch_start: ${{ steps.plan.outputs.batch_start }}
+      batch_end: ${{ steps.plan.outputs.batch_end }}
+      days_per_shard: ${{ steps.plan.outputs.days_per_shard }}
+      manual: ${{ steps.plan.outputs.manual }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover checkpoint from last durable artifact when git state is absent
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ ! -f state/fast_backfill_progress.json ]; then
+            state_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=fast-backfill-state&per_page=10" \
+              --jq '.artifacts | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+            if [ -n "$state_id" ]; then
+              if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$state_id/zip" > /tmp/fast-state.zip 2>/dev/null; then
+                mkdir -p state
+                unzip -p /tmp/fast-state.zip fast_backfill_progress.json \
+                  > /tmp/recovered-state.json 2>/dev/null || true
+                if [ -s /tmp/recovered-state.json ]; then
+                  mv /tmp/recovered-state.json state/fast_backfill_progress.json
+                  echo "Recovered progress from previous run artifact."
+                fi
+              fi
+            fi
+          fi
+      - id: plan
+        name: Plan eight disjoint seven-day shards
+        env:
+          START_INPUT: ${{ inputs.start_date }}
+        run: |
+          set -euo pipefail
+          cmd=(python scripts/fast_backfill_control.py plan --shards 8 --days-per-shard 7)
+          if [ -n "$START_INPUT" ]; then cmd+=(--start-date "$START_INPUT"); fi
+          "${cmd[@]}"
+          if [ -n "$START_INPUT" ]; then echo "manual=true" >> "$GITHUB_OUTPUT"; else echo "manual=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fast-plan-${{ github.run_id }}
+          path: |
+            state/fast_backfill_progress.json
+            out/fast_backfill_plan.json
+          if-no-files-found: error
+          retention-days: 90
+
+  collect:
+    needs: plan
+    if: ${{ needs.plan.outputs.active == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    env:
+      COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+      GH_TOKEN: ${{ github.token }}
+      TZ: Asia/Tokyo
+      KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+      KEIRIN_BACKFILL_VENUE_WORKERS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Require private encryption key
+        shell: bash
+        run: |
+          if [ "${#COLLECTOR_PASSPHRASE}" -lt 32 ]; then
+            echo "::error::COLLECTOR_PASSPHRASE of at least 32 characters is required"
+            exit 1
+          fi
+      - name: Install source collection dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml pandas numpy click python-dotenv
+      - id: partition
+        name: Compute independent shard dates
+        run: |
+          python scripts/fast_backfill_control.py shard \
+            --batch-start "${{ needs.plan.outputs.batch_start }}" \
+            --batch-end "${{ needs.plan.outputs.batch_end }}" \
+            --index "${{ matrix.shard }}" --days-per-shard 7
+      - name: Collect new source data and encrypt each finished day
+        if: ${{ steps.partition.outputs.shard_days != '0' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/backfill_training_data.py --source winticket \
+            --start-date "${{ steps.partition.outputs.shard_start }}" \
+            --days "${{ steps.partition.outputs.shard_days }}"
+      - name: Save encrypted shards plus gap audit regardless of incomplete days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-shard-${{ github.run_id }}-${{ matrix.shard }}
+          path: |
+            encrypted/*.sqlite.gpg
+            backfill_reports/*.json
+            backfill_summary.json
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Copy encrypted shards to durable monthly releases
+        if: ${{ success() && steps.partition.outputs.shard_days != '0' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for archive in encrypted/*.sqlite.gpg; do
+            [ -f "$archive" ] || continue
+            basename="${archive##*/}"
+            datepart="${basename#winticket-}"
+            tag="training-data-${datepart:0:7}"
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              gh release create "$tag" --target "$GITHUB_SHA" \
+                --title "$tag fresh encrypted data" \
+                --notes "Fresh-source encrypted SQLite only. Keep decryption key offline." || true
+            fi
+            if ! gh release upload "$tag" "$archive" --clobber; then
+              echo "::warning::Durable archive denied for $basename; 90-day artifact retained."
+            fi
+          done
+
+  finalize:
+    needs: [plan, collect]
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.active == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      should_continue: ${{ steps.finish.outputs.should_continue }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve original planning checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: fast-plan-${{ github.run_id }}
+          path: downloaded/plan
+      - name: Retrieve all completed shard reports
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: fast-shard-${{ github.run_id }}-*
+          path: downloaded/shards
+      - id: finish
+        name: Merge audit and advance checkpoint past missing dates
+        shell: bash
+        env:
+          MANUAL: ${{ needs.plan.outputs.manual }}
+        run: |
+          set -euo pipefail
+          cmd=(python scripts/fast_backfill_control.py finalize \
+            --batch-start "${{ needs.plan.outputs.batch_start }}" \
+            --batch-end "${{ needs.plan.outputs.batch_end }}" \
+            --results-dir downloaded)
+          if [ "$MANUAL" = "true" ]; then cmd+=(--manual); fi
+          "${cmd[@]}"
+      - name: Preserve durable recovery checkpoint in Actions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-backfill-state
+          path: state/fast_backfill_progress.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Commit metadata-only checkpoint to repository
+        if: ${{ steps.finish.outcome == 'success' && needs.plan.outputs.manual != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/fast_backfill_progress.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Advance fresh winticket historical collection checkpoint"
+            if ! git push origin HEAD:"${GITHUB_REF_NAME}"; then
+              echo "::warning::Checkpoint push blocked; Actions artifact has recovery copy."
+            fi
+          fi
+      - name: Immediately queue next batch when source is healthy
+        if: ${{ steps.finish.outputs.should_continue == 'true' && needs.plan.outputs.manual != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh workflow run high-speed-backfill.yml --ref "${GITHUB_REF_NAME}" ||
+            echo "::warning::Auto-dispatch unavailable; scheduled runs will continue."
