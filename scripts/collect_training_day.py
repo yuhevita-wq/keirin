@@ -2,9 +2,12 @@
 """Collect WINTICKET training records for exactly one completed day into isolated SQLite."""
 import argparse
 import json
+import sys
 from datetime import datetime, timedelta, date
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 def main():
     parser = argparse.ArgumentParser()
@@ -30,7 +33,7 @@ def main():
     report = {
         "source": "winticket", "date": target.isoformat(), "races": races,
         "entries": entries, "odds": odds, "results": results, "errors": errors,
-        "complete": bool(races and entries and results and not errors),
+        "complete": bool(races and entries and odds and results and not errors),
         "odds_timestamp": "collection time (not proven preclose 15-min odds)",
     }
     Path("collection_report.json").write_text(
