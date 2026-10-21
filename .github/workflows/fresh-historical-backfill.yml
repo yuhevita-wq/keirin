@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: fresh-historical-backfill
@@ -50,6 +51,23 @@ jobs:
           fi
       - name: Install collector dependencies
         run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml pandas numpy click python-dotenv
+      - name: Recover cursor from previous encrypted artifact when repository updates were denied
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f state/backfill_progress.json ]; then
+            previous_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false and (.name | startswith("fresh-winticket-backfill-"))) | .id' 2>/dev/null | head -n 1 || true)"
+            if [ -n "$previous_id" ]; then
+              echo "Recovering progress from prior run artifact $previous_id"
+              if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$previous_id/zip" > /tmp/previous-fresh-backfill.zip 2>/dev/null; then
+                mkdir -p state
+                unzip -p /tmp/previous-fresh-backfill.zip "state/backfill_progress.json" > /tmp/previous-fresh-state.json 2>/dev/null || true
+                if [ -s /tmp/previous-fresh-state.json ]; then
+                  mv /tmp/previous-fresh-state.json state/backfill_progress.json
+                fi
+              fi
+            fi
+          fi
       - name: Collect seven fresh historical dates, keep partial days, advance over failures
         shell: bash
         run: |
