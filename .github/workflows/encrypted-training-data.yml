@@ -1,6 +1,9 @@
 name: Encrypted Training Data Collection
 
 on:
+  push:
+    paths:
+      - ".github/workflows/encrypted-training-data.yml"
   workflow_dispatch:
     inputs:
       target_date:
@@ -66,17 +69,31 @@ jobs:
             --passphrase-fd 0 --symmetric --cipher-algo AES256 \
             --output "$ARCHIVE" data/keirin.db
           test -s "$ARCHIVE"
-      - name: Store encrypted shard in a monthly GitHub Release
+      - name: Preserve encrypted shard and audit for 90 days
+        uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-winticket-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            encrypted/*.sqlite.gpg
+            collection_report.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Try durable encrypted GitHub Release backup
         shell: bash
         run: |
           set -euo pipefail
           TAG="training-data-$(echo "$RUN_DATE" | cut -c1-7)"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --target "$GITHUB_SHA" \
+            if ! gh release create "$TAG" --target "$GITHUB_SHA" \
               --title "Encrypted training data $TAG" \
-              --notes "Encrypted daily SQLite shards only; keep the secret offline."
+              --notes "Encrypted daily SQLite shards only; keep the secret offline."; then
+              echo "::warning::Release creation denied; encrypted 90-day artifact is retained."
+              exit 0
+            fi
           fi
-          gh release upload "$TAG" encrypted/*.gpg --clobber
+          if ! gh release upload "$TAG" encrypted/*.gpg --clobber; then
+            echo "::warning::Release upload denied; encrypted 90-day artifact is retained."
+          fi
       - name: Save non-sensitive audit counts
         if: always()
         uses: actions/upload-artifact@v4
