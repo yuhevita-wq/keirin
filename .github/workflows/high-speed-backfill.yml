@@ -41,6 +41,10 @@ jobs:
             echo "::error::A private COLLECTOR_PASSPHRASE of 32+ chars is required; no dates were advanced."
             exit 1
           fi
+      - name: Validate collection controller
+        run: |
+          python -m py_compile scripts/fast_backfill_control.py scripts/backfill_training_data.py scripts/collect_training_day.py
+          python -m unittest discover -s tests -p 'test_fast_backfill_control.py' -v
       - name: Recover checkpoint from last durable artifact when git state is absent
         shell: bash
         env:
