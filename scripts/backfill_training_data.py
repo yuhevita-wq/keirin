@@ -60,6 +60,7 @@ def main():
         cmd = [sys.executable, "scripts/collect_training_day.py", "--date", day_str]
         if args.source == "netkeirin":
             cmd += ["--max-races", "0"]
+        report = {}
         try:
             result = subprocess.run(cmd, cwd=ROOT, check=False)
             report_file = ROOT / "collection_report.json"
@@ -94,6 +95,8 @@ def main():
         finally:
             for ending in ("", "-wal", "-shm"):
                 (ROOT / (db_rel + ending)).unlink(missing_ok=True)
+        if report:
+            outcome["source_report"] = report
         outcomes.append(outcome)
         (REPORTS / f"{args.source}-{day_str}.json").write_text(
             json.dumps(outcome, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
