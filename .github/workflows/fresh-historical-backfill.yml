@@ -117,6 +117,8 @@ jobs:
             git add state/backfill_progress.json
             if ! git diff --cached --quiet; then
               git commit -m "Advance fresh winticket historical collection cursor"
-              git push origin HEAD:"${GITHUB_REF_NAME}"
+              if ! git push origin HEAD:"${GITHUB_REF_NAME}"; then
+                echo "::warning::Cursor commit could not be pushed. Next run can recover state from retained encrypted Actions artifact."
+              fi
             fi
           fi
