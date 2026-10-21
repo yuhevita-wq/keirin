@@ -32,6 +32,15 @@ jobs:
       manual: ${{ steps.plan.outputs.manual }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate encryption key before allocating any work
+        env:
+          COLLECTION_KEY: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        shell: bash
+        run: |
+          if [ "${#COLLECTION_KEY}" -lt 32 ]; then
+            echo "::error::A private COLLECTOR_PASSPHRASE of 32+ chars is required; no dates were advanced."
+            exit 1
+          fi
       - name: Recover checkpoint from last durable artifact when git state is absent
         shell: bash
         env:
