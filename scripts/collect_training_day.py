@@ -29,16 +29,33 @@ def main():
         results = conn.execute(
             "SELECT COUNT(*) FROM wt_entries WHERE finish_order >= 1"
         ).fetchone()[0]
+        races_with_odds = conn.execute(
+            "SELECT COUNT(DISTINCT race_key) FROM wt_odds"
+        ).fetchone()[0]
+        races_with_results = conn.execute(
+            "SELECT COUNT(DISTINCT race_key) FROM wt_entries WHERE finish_order >= 1"
+        ).fetchone()[0]
+        odds_by_bet_type = {
+            str(row[0]): int(row[1])
+            for row in conn.execute(
+                "SELECT bet_type, COUNT(*) FROM wt_odds GROUP BY bet_type"
+            ).fetchall()
+        }
     errors = stats.get("errors", 0)
+    missing_odds_races = max(0, races - races_with_odds)
+    missing_result_races = max(0, races - races_with_results)
     report = {
         "source": "winticket", "date": target.isoformat(), "races": races,
         "entries": entries, "odds": odds, "results": results, "errors": errors,
-        "complete": bool(races and entries and odds and results and not errors),
+        "races_with_odds": races_with_odds,
+        "races_with_results": races_with_results,
+        "missing_odds_races": missing_odds_races,
+        "missing_result_races": missing_result_races,
+        "odds_by_bet_type": odds_by_bet_type,
+        "complete": bool(races and entries and odds and results and not errors
+                         and not missing_odds_races and not missing_result_races),
         "odds_timestamp": "collection time (not proven preclose 15-min odds)",
     }
-    Path("collection_report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
     print(json.dumps(report, ensure_ascii=False))
     report["status"] = "complete" if report["complete"] else "partial"
     Path("collection_report.json").write_text(
