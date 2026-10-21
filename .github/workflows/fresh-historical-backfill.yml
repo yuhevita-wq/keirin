@@ -89,7 +89,7 @@ jobs:
             fi
           done
       - name: Save resumable metadata-only cursor on GitHub
-        if: ${{ inputs.start_date == '' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.start_date == '' }}
         shell: bash
         run: |
           set -euo pipefail
