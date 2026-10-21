@@ -209,6 +209,13 @@ jobs:
           path: state/fast_backfill_progress.json
           if-no-files-found: error
           retention-days: 90
+      - name: Audit long-term Release storage for collected dates
+        if: ${{ steps.finish.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python scripts/audit_winticket_storage.py || echo "::warning::Release backup audit did not finish."
       - name: Commit metadata-only checkpoint to repository
         if: ${{ steps.finish.outcome == 'success' && needs.plan.outputs.manual != 'true' }}
         shell: bash
@@ -216,7 +223,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state/fast_backfill_progress.json
+          git add state/fast_backfill_progress.json reports/winticket_storage_audit.json
           if ! git diff --cached --quiet; then
             git commit -m "Advance fresh winticket historical collection checkpoint"
             if ! git pull --rebase origin "${GITHUB_REF_NAME}"; then
