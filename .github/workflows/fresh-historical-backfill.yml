@@ -1,9 +1,6 @@
 name: Fresh Historical AI Training Backfill
 
 on:
-  push:
-    paths:
-      - ".github/workflows/fresh-historical-backfill.yml"
   workflow_dispatch:
     inputs:
       start_date:
@@ -15,8 +12,6 @@ on:
         required: false
         default: "7"
         type: string
-  schedule:
-    - cron: "15 1,13 * * *" # 10:15 / 22:15 JST, automatic historical progress
 
 permissions:
   contents: write
