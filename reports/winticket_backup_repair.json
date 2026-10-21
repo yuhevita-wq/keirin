@@ -1,0 +1,36 @@
+{
+  "repository": "yuhevita-wq/keirin",
+  "missing_before": 56,
+  "restored_to_release": 56,
+  "missing_after": 0,
+  "months": {
+    "2023-01": {
+      "expected": 31,
+      "already_present": 0
+    },
+    "2023-02": {
+      "expected": 28,
+      "already_present": 3
+    },
+    "2023-03": {
+      "expected": 31,
+      "already_present": 31
+    },
+    "2023-04": {
+      "expected": 30,
+      "already_present": 30
+    },
+    "2023-05": {
+      "expected": 31,
+      "already_present": 31
+    },
+    "2023-06": {
+      "expected": 17,
+      "already_present": 17
+    }
+  },
+  "runs_examined": 7,
+  "shards_examined": 8,
+  "failed_uploads": 0,
+  "missing_dates_after_sample": []
+}
