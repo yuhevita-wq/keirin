@@ -1,0 +1,43 @@
+name: Repair WINTICKET Durable Backups
+on:
+  push:
+    paths:
+      - ".github/workflows/repair-winticket-backups.yml"
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover encrypted historical shards from Actions artifacts
+        run: python scripts/repair_winticket_backups.py
+      - name: Verify every monthly Release backup after repair
+        run: python scripts/audit_winticket_storage.py
+      - name: Save repair and verification manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: winticket-backup-repair-${{ github.run_id }}
+          path: |
+            reports/winticket_backup_repair.json
+            reports/winticket_storage_audit.json
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Publish permanent metadata-only repair report
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/winticket_backup_repair.json reports/winticket_storage_audit.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Recover durable new-source WINTICKET archives from Actions"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
