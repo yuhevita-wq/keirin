@@ -1,5 +1,6 @@
 """winticket データ収集パイプライン"""
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -9,7 +10,9 @@ from .winticket import WinticketScraper, VENUE_SLUGS
 logger = logging.getLogger(__name__)
 _db_lock = threading.Lock()
 
-MAX_VENUE_WORKERS = 4  # 会場絞り込み後の並列度（単一ドメインなので控えめに）
+# Fast backfills run across multiple machines. Limit workers within each
+# machine to avoid accidental request bursts against the same source.
+MAX_VENUE_WORKERS = max(1, min(4, int(os.getenv("KEIRIN_BACKFILL_VENUE_WORKERS", "4"))))
 
 
 class WinticketPipeline:
