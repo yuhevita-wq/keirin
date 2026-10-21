@@ -1,0 +1,104 @@
+name: Fresh Historical AI Training Backfill
+
+on:
+  push:
+    paths:
+      - ".github/workflows/fresh-historical-backfill.yml"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Optional retry start YYYY-MM-DD; blank resumes cursor"
+        required: false
+        type: string
+      days:
+        description: "Completed historical dates to attempt, 1-14"
+        required: false
+        default: "7"
+        type: string
+  schedule:
+    - cron: "15 1,13 * * *" # 10:15 / 22:15 JST, automatic historical progress
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fresh-historical-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+      GH_TOKEN: ${{ github.token }}
+      TZ: Asia/Tokyo
+      INPUT_DATE: ${{ inputs.start_date }}
+      INPUT_DAYS: ${{ inputs.days }}
+      KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Require private strong encryption secret
+        shell: bash
+        run: |
+          if [ "${#COLLECTOR_PASSPHRASE}" -lt 32 ]; then
+            echo "::error::Set COLLECTOR_PASSPHRASE in Actions secrets first."
+            exit 1
+          fi
+      - name: Install collector dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml pandas numpy click python-dotenv
+      - name: Collect seven fresh historical dates, keep partial days, advance over failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmd=(python scripts/backfill_training_data.py --source winticket --days "${INPUT_DAYS:-7}")
+          if [ -n "$INPUT_DATE" ]; then cmd+=(--start-date "$INPUT_DATE"); fi
+          "${cmd[@]}"
+      - name: Preserve every encrypted shard and audit manifest for 90 days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-winticket-backfill-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            encrypted/*.sqlite.gpg
+            backfill_reports/*.json
+            backfill_summary.json
+            state/backfill_progress.json
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Copy available encrypted shards into durable monthly GitHub Releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          for archive in encrypted/*.sqlite.gpg; do
+            [ -f "$archive" ] || continue
+            basename="${archive##*/}"
+            datepart="${basename#winticket-}"
+            tag="training-data-${datepart:0:7}"
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              if ! gh release create "$tag" --target "$GITHUB_SHA" --title "$tag encrypted fresh data" --notes "Encrypted newly collected daily training shards only. No encryption key is stored."; then
+                echo "::warning::Release creation denied; 90-day encrypted artifact remains."
+                continue
+              fi
+            fi
+            if ! gh release upload "$tag" "$archive" --clobber; then
+              echo "::warning::Release upload failed for $basename; 90-day encrypted artifact remains."
+            fi
+          done
+      - name: Save resumable metadata-only cursor on GitHub
+        if: ${{ inputs.start_date == '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f state/backfill_progress.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state/backfill_progress.json
+            if ! git diff --cached --quiet; then
+              git commit -m "Advance fresh winticket historical collection cursor"
+              git push origin HEAD:"${GITHUB_REF_NAME}"
+            fi
+          fi
