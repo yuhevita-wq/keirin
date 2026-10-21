@@ -59,18 +59,18 @@ jobs:
                 > /tmp/recovered-state.json 2>/dev/null || true
               if [ -s /tmp/recovered-state.json ]; then
                 python - <<'PY'
-import json
-from pathlib import Path
-candidate = json.loads(Path("/tmp/recovered-state.json").read_text())
-target = Path("state/fast_backfill_progress.json")
-current = json.loads(target.read_text()) if target.exists() else {}
-if candidate.get("next_date", "") > current.get("next_date", ""):
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(candidate, ensure_ascii=False, indent=2) + "\n")
-    print("Recovered a newer checkpoint from the successful prior run.")
-else:
-    print("Repository checkpoint already as new as the latest artifact.")
-PY
+                import json
+                from pathlib import Path
+                candidate = json.loads(Path("/tmp/recovered-state.json").read_text())
+                target = Path("state/fast_backfill_progress.json")
+                current = json.loads(target.read_text()) if target.exists() else {}
+                if candidate.get("next_date", "") > current.get("next_date", ""):
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(json.dumps(candidate, ensure_ascii=False, indent=2) + "\n")
+                    print("Recovered a newer checkpoint from the successful prior run.")
+                else:
+                    print("Repository checkpoint already as new as the latest artifact.")
+                PY
               fi
             fi
           fi
