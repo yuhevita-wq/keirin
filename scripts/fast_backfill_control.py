@@ -136,12 +136,40 @@ def do_finalize(args):
         state["days_archived"] += archived
         state["days_partial"] += partial
         state["days_failed"] += len(failed)
+    # Public, aggregate-only counters: useful for proving we collected
+    # substantial real data without exposing unencrypted race records.
+    counted = [r for r in completed if r["status"] in ("complete", "partial")]
+    batch_counts = {
+        "races": sum(int(r.get("races") or 0) for r in counted),
+        "entries": sum(int(r.get("entries") or 0) for r in counted),
+        "results": sum(int(r.get("results") or 0) for r in counted),
+        "odds": sum(int((r.get("source_report") or {}).get("odds") or 0)
+                    for r in counted),
+        "missing_odds_races": sum(
+            int((r.get("source_report") or {}).get("missing_odds_races") or 0)
+            for r in counted),
+        "missing_result_races": sum(
+            int((r.get("source_report") or {}).get("missing_result_races") or 0)
+            for r in counted),
+    }
+    wager_counts = {}
+    for row in counted:
+        for wager, n in (row.get("source_report") or {}).get("odds_by_bet_type", {}).items():
+            wager_counts[wager] = wager_counts.get(wager, 0) + int(n)
     state["last_batch"] = {
         "from": start.isoformat(), "to": end.isoformat(),
         "attempted": len(completed), "archived": archived,
         "partial": partial, "failed": len(failed),
         "missing_days": failed, "manual": args.manual,
+        **batch_counts, "odds_by_bet_type": wager_counts,
     }
+    if advance_cursor:
+        aggregate = state.setdefault("metrics_since_2026_10_22_upgrade", {})
+        for key, value in batch_counts.items():
+            aggregate[key] = int(aggregate.get(key, 0)) + value
+        by_wager = aggregate.setdefault("odds_by_bet_type", {})
+        for wager, value in wager_counts.items():
+            by_wager[wager] = int(by_wager.get(wager, 0)) + value
     write_state(state)
     output_vars(archived=archived, failed=len(failed), partial=partial,
                 has_next=str(end < jst_yesterday()).lower(),
