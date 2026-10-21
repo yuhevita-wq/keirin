@@ -40,8 +40,14 @@ def main():
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(json.dumps(report, ensure_ascii=False))
+    report["status"] = "complete" if report["complete"] else "partial"
+    Path("collection_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    if not (races and entries and results):
+        raise SystemExit("No usable races, entries, and results; no shard will be published")
     if not report["complete"]:
-        raise SystemExit("Incomplete collection; no shard will be published")
+        print("Partial day retained for archival; missing fields can be retried later.", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
