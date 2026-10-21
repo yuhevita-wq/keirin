@@ -45,24 +45,32 @@ jobs:
         run: |
           python -m py_compile scripts/fast_backfill_control.py scripts/backfill_training_data.py scripts/collect_training_day.py
           python -m unittest discover -s tests -p 'test_fast_backfill_control.py' -v
-      - name: Recover checkpoint from last durable artifact when git state is absent
+      - name: Recover newest checkpoint even when git state is stale
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [ ! -f state/fast_backfill_progress.json ]; then
-            state_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=fast-backfill-state&per_page=10" \
-              --jq '.artifacts | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
-            if [ -n "$state_id" ]; then
-              if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$state_id/zip" > /tmp/fast-state.zip 2>/dev/null; then
-                mkdir -p state
-                unzip -p /tmp/fast-state.zip fast_backfill_progress.json \
-                  > /tmp/recovered-state.json 2>/dev/null || true
-                if [ -s /tmp/recovered-state.json ]; then
-                  mv /tmp/recovered-state.json state/fast_backfill_progress.json
-                  echo "Recovered progress from previous run artifact."
-                fi
+          state_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=fast-backfill-state&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+          if [ -n "$state_id" ]; then
+            if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$state_id/zip" > /tmp/fast-state.zip 2>/dev/null; then
+              unzip -p /tmp/fast-state.zip fast_backfill_progress.json \
+                > /tmp/recovered-state.json 2>/dev/null || true
+              if [ -s /tmp/recovered-state.json ]; then
+                python - <<'PY'
+import json
+from pathlib import Path
+candidate = json.loads(Path("/tmp/recovered-state.json").read_text())
+target = Path("state/fast_backfill_progress.json")
+current = json.loads(target.read_text()) if target.exists() else {}
+if candidate.get("next_date", "") > current.get("next_date", ""):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(candidate, ensure_ascii=False, indent=2) + "\n")
+    print("Recovered a newer checkpoint from the successful prior run.")
+else:
+    print("Repository checkpoint already as new as the latest artifact.")
+PY
               fi
             fi
           fi
@@ -211,7 +219,10 @@ jobs:
           git add state/fast_backfill_progress.json
           if ! git diff --cached --quiet; then
             git commit -m "Advance fresh winticket historical collection checkpoint"
-            if ! git push origin HEAD:"${GITHUB_REF_NAME}"; then
+            if ! git pull --rebase origin "${GITHUB_REF_NAME}"; then
+              git rebase --abort || true
+              echo "::warning::Checkpoint rebase blocked; Actions artifact has recovery copy."
+            elif ! git push origin HEAD:"${GITHUB_REF_NAME}"; then
               echo "::warning::Checkpoint push blocked; Actions artifact has recovery copy."
             fi
           fi
