@@ -1,19 +1,47 @@
 {
   "schema_version": 2,
-  "next_date": "2023-06-18",
-  "days_attempted": 168,
-  "days_archived": 168,
+  "next_date": "2023-10-08",
+  "days_attempted": 280,
+  "days_archived": 280,
   "days_failed": 0,
-  "days_partial": 0,
+  "days_partial": 4,
   "failed_dates": [],
   "last_batch": {
-    "from": "2023-04-23",
-    "to": "2023-06-17",
+    "from": "2023-08-13",
+    "to": "2023-10-07",
     "attempted": 56,
     "archived": 56,
-    "partial": 0,
+    "partial": 4,
     "failed": 0,
     "missing_days": [],
-    "manual": false
+    "manual": false,
+    "races": 4055,
+    "entries": 28847,
+    "results": 28394,
+    "odds": 1444006,
+    "missing_odds_races": 12,
+    "missing_result_races": 15,
+    "odds_by_bet_type": {
+      "exacta": 177620,
+      "quinella": 88810,
+      "quinellaPlace": 88810,
+      "trifecta": 933228,
+      "trio": 155538
+    }
+  },
+  "metrics_since_2026_10_22_upgrade": {
+    "races": 4055,
+    "entries": 28847,
+    "results": 28394,
+    "odds": 1444006,
+    "missing_odds_races": 12,
+    "missing_result_races": 15,
+    "odds_by_bet_type": {
+      "exacta": 177620,
+      "quinella": 88810,
+      "quinellaPlace": 88810,
+      "trifecta": 933228,
+      "trio": 155538
+    }
   }
 }
