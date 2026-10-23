@@ -8,7 +8,7 @@ All original p3 from the independent trained model, not source new estimates.
 This is read-only relative to live collection, branch and release assets.
 """
 from __future__ import annotations
-import argparse, collections, datetime as dt, gzip, hashlib, json, os
+import argparse, collections, datetime as dt, gzip, hashlib, json, os, calendar
 import sqlite3, subprocess, tempfile
 from pathlib import Path
 
@@ -126,7 +126,7 @@ def parse_db(file):
         return out,count,reasons
     finally:db.close()
 
-def run(targets,out):
+def run(targets,out,allow_missing=False):
     passphrase=os.environ.pop("COLLECTOR_PASSPHRASE","")
     if len(passphrase)<32:raise RuntimeError("COLLECTOR_PASSPHRASE_UNAVAILABLE")
     out.mkdir(parents=True,exist_ok=True)
@@ -192,12 +192,20 @@ def run(targets,out):
       "verified_races":counts["races"],"full_7_9":counts["complete_7_9_races"],
       "arare_complete":counts["all_axis_arare_available"],"encrypted_records":writer.count,
       "failures":len(failures)},ensure_ascii=False),flush=True)
-    if writer.count==0:raise RuntimeError("NO_HISTORICAL_SAVED_WINTICKET_RACES")
-    if failures:raise RuntimeError("SOME_EXISTING_RELEASE_DAYS_UNAVAILABLE")
+    if writer.count==0 and not allow_missing:raise RuntimeError("NO_HISTORICAL_SAVED_WINTICKET_RACES")
+    if failures and not allow_missing:raise RuntimeError("SOME_EXISTING_RELEASE_DAYS_UNAVAILABLE")
 
 if __name__=="__main__":
     parser=argparse.ArgumentParser()
     parser.add_argument("--dates",default=",".join(DATES))
+    parser.add_argument("--month",help="YYYY-MM. Read this month ONLY from stored Release assets.")
+    parser.add_argument("--allow-missing",action="store_true",help="Keep separate, explicit missing asset report.")
     parser.add_argument("--output",default="research-output")
     args=parser.parse_args()
-    run([x.strip() for x in args.dates.split(",") if x.strip()],Path(args.output))
+    if args.month:
+        ym=dt.date.fromisoformat(args.month+"-01")
+        end=calendar.monthrange(ym.year,ym.month)[1]
+        if args.month=="2025-04":end=min(end,19)
+        days=[f"{args.month}-{k:02d}" for k in range(1,end+1)]
+    else:days=[x.strip() for x in args.dates.split(",") if x.strip()]
+    run(days,Path(args.output),args.allow_missing)
