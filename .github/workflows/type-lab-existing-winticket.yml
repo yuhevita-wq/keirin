@@ -5,6 +5,10 @@ on:
     paths:
       - "research/type_lab_existing/**"
       - ".github/workflows/type-lab-existing-winticket.yml"
+  pull_request:
+    paths:
+      - "research/type_lab_existing/**"
+      - ".github/workflows/type-lab-existing-winticket.yml"
   workflow_dispatch:
 permissions:
   contents: read
