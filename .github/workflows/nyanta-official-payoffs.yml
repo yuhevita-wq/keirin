@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: yuhevita-wq/kiseki
-          ref: a0dab41e684289e4ea1925f1f104582fd74051cd
+          ref: 531a517428f4abe38bc334bb4c604dc154a0134e
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -24,7 +24,7 @@ jobs:
       - name: Load already-verified encrypted corpus
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download nyanta-core-checkpoint-40050812352 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+        run: gh release download nyanta-verified-checkpoint-40052323240 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
       - name: Recover only missing official payouts for first verification day
         env:
           COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
