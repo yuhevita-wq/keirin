@@ -65,13 +65,18 @@ jobs:
                   legs = json.loads(legs)
               return legs
 
+          race_car_counts = {
+              str(r['race_key']): len(r['entries'])
+              for r in original['data']['displayed']
+          }
+
           def odds_index(rows, description):
               prices = defaultdict(list)
               races = defaultdict(set)
               skipped = 0
               for row in rows:
                   rk = str(row['race_key'])
-                  n = int(row['n_entries'])
+                  n = int(row.get('n_entries') or race_car_counts.get(rk) or (9 if str(row.get('mode', '')).endswith('9') else 7))
                   if n not in (7, 9):
                       continue
                   races[n].add(rk)
