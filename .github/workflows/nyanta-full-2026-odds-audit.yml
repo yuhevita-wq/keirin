@@ -1,0 +1,179 @@
+name: Nyanta full-2026 frozen trifecta odds audit
+'on':
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-full-2026-odds-audit.yml]
+permissions:
+  contents: read
+  actions: read
+env:
+  KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+  OMP_NUM_THREADS: "4"
+  OPENBLAS_NUM_THREADS: "4"
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        n_car: [7, 9]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: e8252a17e22b95b85b2c143616df4b553eeffb47
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install original inference requirements
+        run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2
+      - name: Restore existing fully verified real odds and frozen odds model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p checkpoint trained
+          gh release download nyanta-real-odds-inputs-40055515403 --repo yuhevita-wq/keirin --pattern odds-input.sqlite.gpg --dir checkpoint
+          gh release download nyanta-real-odds-inputs-40055515403 --repo yuhevita-wq/keirin --pattern original-wf-inputs.tar.gpg --dir checkpoint
+          gh release download nyanta-odds-tf-n${{ matrix.n_car }}-40055515403 --repo yuhevita-wq/keirin --pattern "odds-tf-n${{ matrix.n_car }}.tar.gpg" --dir trained
+      - name: Read-only original inference on every eligible 2026 race, month by month
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+          N_CAR: ${{ matrix.n_car }}
+        run: |
+          python -u - <<'PY'
+          import gc
+          import json
+          import math
+          import os
+          from collections import defaultdict
+          from pathlib import Path
+
+          import numpy as np
+          import pandas as pd
+          import lightgbm as lgb
+          from scripts.reconstruct_core import crypt
+          from scripts.reconstruct_odds import ReadConnection, unpack
+          from src import database
+          from scripts import train_odds_prediction_tf as original
+
+          n = int(os.environ["N_CAR"])
+          assert n in (7, 9)
+          database.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+          crypt(Path("checkpoint/odds-input.sqlite.gpg"), database.DB_PATH, decrypt=True)
+          unpack(Path("checkpoint/original-wf-inputs.tar.gpg"),
+                 original.EXP, {"axis_detail_7car.pkl", "wf_preds9_reconstruction.pkl"})
+          unpack(Path(f"trained/odds-tf-n{n}.tar.gpg"),
+                 original.MODEL_DIR, {f"odds_tf_n{n}.txt", "odds_tf_meta.json"})
+          meta = json.loads(original.META_PATH.read_text())
+          assert meta["per_n_car"][str(n)]["train_end"] == "2025-12-31"
+          assert list(original.FEATURE_NAMES) == meta["feature_names"]
+          model = lgb.Booster(model_file=str(original.MODEL_DIR / f"odds_tf_n{n}.txt"))
+          assert model.num_feature() == len(original.FEATURE_NAMES)
+          original.N_CAR = n
+          original.N_COMBO = n*(n-1)*(n-2)
+          original._connect = lambda: ReadConnection(database.DB_PATH)
+          wf = original._load_wf_preds()
+          months = sorted({row[2][:7] for row in wf.values() if row[2].startswith("2026-")})
+          assert months, "no actual post-training 2026 WF records"
+          target = float(meta["target_sum"][str(n)])
+          assert 1.20 < target < 1.5
+          report = {
+             "experiment": "full_2026_frozen_native_odds_inference",
+             "n_car": n,
+             "model_training_end": "2025-12-31",
+             "original_feature_count": len(original.FEATURE_NAMES),
+             "model_refit": False,
+             "model_rules_modified": False,
+             "reference_original_prediction_match": "not_measured; original per-combo history missing",
+             "source": "actual archived final trifecta odds and original WF 1st/top3 probabilities",
+             "all_2026_wf_races": sum(1 for row in wf.values() if row[2].startswith("2026-")),
+             "months": [],
+             "odds_bands": [],
+          }
+          band_bounds = [0, 5, 10, 20, 50, 100, 300, 1000, 3000, float("inf")]
+          band_names = ["(0,5]","(5,10]","(10,20]","(20,50]","(50,100]","(100,300]","(300,1000]","(1000,3000]","(3000,+inf)"]
+          acc = {b: {"n":0, "sum_abs_log10":0., "sum_log10":0.,
+                      "within2x":0, "under08":0} for b in band_names}
+          combined = {"n":0, "races":0, "sum_abs_log10":0., "within2x":0, "under08":0, "top1_agree":0}
+          for month in months:
+             monthly_wf = {rk:r for rk,r in wf.items() if r[2].startswith(month)}
+             original._load_wf_preds = lambda vals=monthly_wf: vals
+             dataset = original.build_dataset(None).reset_index(drop=True)
+             assert dataset.date.str.startswith(month).all()
+             assert dataset.date.str.startswith("2026-").all()
+             y = dataset.odds.to_numpy(dtype=float)
+             raw = np.clip(10**model.predict(dataset[list(original.FEATURE_NAMES)], num_threads=4),1.0,None)
+             base = pd.DataFrame({"rk": dataset.rk.to_numpy(), "reciprocal":1/raw})
+             scale = base.groupby("rk",sort=False).reciprocal.transform("sum").to_numpy()/target
+             coherent = raw * scale
+             ratio = coherent/y
+             err = np.log10(ratio)
+             assert np.isfinite(err).all()
+             race_count = int(dataset.rk.nunique())
+             candidates = int(len(monthly_wf))
+             # The rank-1 test is strictly within complete or filtered original training boards.
+             pred_first = pd.Series(coherent).groupby(dataset.rk).idxmin()
+             real_first = dataset.odds.groupby(dataset.rk).idxmin()
+             top1 = int((pred_first == real_first).sum())
+             m = {
+                "month": month, "wf_candidate_races": candidates,
+                "evaluated_races": race_count, "evaluated_combinations":len(dataset),
+                "mean_abs_log10_error":float(np.abs(err).mean()),
+                "mean_signed_log10_error":float(err.mean()),
+                "within2x_pct":float(100*((ratio>=0.5)&(ratio<=2.)).mean()),
+                "under08_pct":float(100*(ratio<0.8).mean()),
+                "top1_predicted_odds_min_matches_final":top1,
+                "top1_comparable_races":race_count
+             }
+             report["months"].append(m)
+             print("NYANTA_ODDS_2026_MONTH="+json.dumps(m, ensure_ascii=False),flush=True)
+             combined["n"] += len(dataset)
+             combined["races"] += race_count
+             combined["sum_abs_log10"] += float(np.abs(err).sum())
+             combined["within2x"] += int(((ratio>=0.5)&(ratio<=2.)).sum())
+             combined["under08"] += int((ratio<0.8).sum())
+             combined["top1_agree"] += top1
+             bands = pd.cut(coherent, bins=band_bounds, labels=band_names, include_lowest=True)
+             for name in band_names:
+                mask = (bands==name)
+                if not mask.any():
+                   continue
+                p=acc[name]
+                p["n"] += int(mask.sum())
+                p["sum_abs_log10"] += float(np.abs(err[mask]).sum())
+                p["sum_log10"] += float(err[mask].sum())
+                p["within2x"] += int(((ratio[mask]>=0.5)&(ratio[mask]<=2.)).sum())
+                p["under08"] += int((ratio[mask]<0.8).sum())
+             del dataset, y, raw, base, coherent, ratio, err
+             gc.collect()
+          if not combined["n"] or not combined["races"]:
+             raise RuntimeError("no actual full-year evaluation observations")
+          report["overall"] = {
+             "evaluated_combinations": combined["n"],
+             "evaluated_races":combined["races"],
+             "mean_abs_log10_error":combined["sum_abs_log10"]/combined["n"],
+             "within2x_pct":100*combined["within2x"]/combined["n"],
+             "under08_pct":100*combined["under08"]/combined["n"],
+             "top1_odds_min_agreement_pct":100*combined["top1_agree"]/combined["races"],
+          }
+          report["odds_bands"] = [
+             {"band": k, "n":v["n"],
+              "mean_abs_log10_error":v["sum_abs_log10"]/v["n"],
+              "mean_signed_log10_error":v["sum_log10"]/v["n"],
+              "within2x_pct":100*v["within2x"]/v["n"],
+              "under08_pct":100*v["under08"]/v["n"]}
+             for k,v in acc.items() if v["n"]
+          ]
+          Path("results").mkdir(exist_ok=True)
+          Path(f"results/nyanta-odds-full-2026-n{n}.json").write_text(
+             json.dumps(report, ensure_ascii=False, indent=2)+"\n")
+          print("NYANTA_ODDS_2026_TOTAL="+json.dumps(report["overall"],ensure_ascii=False),flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: nyanta-odds-full-2026-n${{ matrix.n_car }}-${{ github.run_id }}
+          path: results/nyanta-odds-full-2026-n*.json
+          if-no-files-found: error
