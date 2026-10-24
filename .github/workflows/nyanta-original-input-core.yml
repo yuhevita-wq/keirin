@@ -1,0 +1,52 @@
+name: Nyanta original-input core training
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-original-input-core.yml]
+permissions:
+  contents: write
+env:
+  KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+  OMP_NUM_THREADS: "4"
+  OPENBLAS_NUM_THREADS: "4"
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [top3, win]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 53f848729883d7cc810fbb0ba2b3511c1037f9cf
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2
+      - name: Load verified full corpus
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download nyanta-verified-checkpoint-40052323240 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+      - name: Original 70-feature learning, original builtin imputation, full verified holdout
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: python -u keirin/scripts/reconstruct_core.py train --target ${{ matrix.target }} --checkpoint checkpoint/nyanta-core.sqlite.gpg --report results/original-input-${{ matrix.target }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-original-input-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            results/*.json
+            results/*.gpg
+      - name: Save models and real evaluation permanently
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-original-input-${{ matrix.target }}-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Original builtin imputation retained by user instruction; original 70 features and training program. Full verified 2026 holdout."
+          gh release upload "$tag" results/*.json results/*.gpg --repo yuhevita-wq/keirin
