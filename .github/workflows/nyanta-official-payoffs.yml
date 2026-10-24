@@ -1,0 +1,47 @@
+name: Nyanta original official-payout check
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-official-payoffs.yml]
+permissions:
+  contents: write
+env:
+  KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+jobs:
+  payout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: a0dab41e684289e4ea1925f1f104582fd74051cd
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests beautifulsoup4 lxml pandas==2.2.1 numpy==1.26.4
+      - name: Load already-verified encrypted corpus
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download nyanta-core-checkpoint-40050812352 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+      - name: Recover only missing official payouts for first verification day
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: python -u keirin/scripts/reconstruct_payoffs.py --month 2026-10 --first-day 23 --checkpoint checkpoint/nyanta-core.sqlite.gpg --output results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-official-payouts-${{ github.run_id }}
+          path: |
+            results/*.gpg
+            results/*.json
+          if-no-files-found: warn
+      - name: Save encrypted official payouts durably
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-official-payouts-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Original collector; actual official payouts only. No payout is inferred from odds."
+          gh release upload "$tag" results/*.gpg results/*.json --repo yuhevita-wq/keirin
