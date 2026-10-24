@@ -1,4 +1,4 @@
-name: Nyanta frozen original display comparison
+name: Nyanta original-input model display and type comparison
 on:
   push:
     branches: [rebuild/nyanta-data-audit]
@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: yuhevita-wq/kiseki
-          ref: 297d383e8b5e7f0702274fbf7843b27f6c252c8e
+          ref: b01a1181c6a90a441928844acad36fc3174f660c
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -26,8 +26,8 @@ jobs:
       - run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2
       - uses: actions/download-artifact@v4
         with:
-          pattern: nyanta-original-core-*-40050812352
-          run-id: 40050812352
+          pattern: nyanta-original-input-*-40053833992
+          run-id: 40053833992
           github-token: ${{ github.token }}
           path: trained
       - name: Read verified full corpus
