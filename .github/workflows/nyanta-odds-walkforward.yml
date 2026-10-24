@@ -1,0 +1,91 @@
+name: Nyanta original odds walkforward inputs
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-odds-walkforward.yml]
+permissions:
+  contents: write
+env:
+  KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+  OMP_NUM_THREADS: "4"
+  OPENBLAS_NUM_THREADS: "4"
+jobs:
+  features:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 6970bb9354f1e9be610e1702cc2d2b29fcc0c61b
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2
+      - name: Load verified full corpus
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download nyanta-verified-checkpoint-40052323240 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+      - name: Build unchanged original 70 features once
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: python -u keirin/scripts/reconstruct_wf.py prepare --checkpoint checkpoint/nyanta-core.sqlite.gpg --output results
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nyanta-original-features-${{ github.run_id }}
+          path: |
+            results/*.gpg
+            results/*.json
+          compression-level: 0
+      - name: Save encrypted feature checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-original-features-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Original 70-feature matrix with unchanged original imputation. Encrypted row data only."
+          gh release upload "$tag" results/*.gpg results/*.json --repo yuhevita-wq/keirin
+  walkforward:
+    needs: features
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        n_car: [7,9]
+        window_index: [0,1,2,3,4,5]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 6970bb9354f1e9be610e1702cc2d2b29fcc0c61b
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: nyanta-original-features-${{ github.run_id }}
+          path: checkpoint
+      - name: Original five-seed learning on genuinely earlier dates only
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: python -u keirin/scripts/reconstruct_wf.py window --features checkpoint/original-features.pkl.gpg --n-car ${{ matrix.n_car }} --window-index ${{ matrix.window_index }} --output results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-wf-n${{ matrix.n_car }}-w${{ matrix.window_index }}-${{ github.run_id }}
+          path: |
+            results/*.gpg
+            results/*.json
+          if-no-files-found: warn
+      - name: Save completed original walkforward window permanently
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-wf-n${{ matrix.n_car }}-w${{ matrix.window_index }}-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Original five-seed fit_predict. Only confirmed past labels used; features and hyperparameters unchanged."
+          gh release upload "$tag" results/*.json results/*.gpg --repo yuhevita-wq/keirin
