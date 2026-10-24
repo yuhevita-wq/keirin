@@ -1,0 +1,107 @@
+name: Nyanta original core training
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-core-training.yml]
+  workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: Previous Nyanta core run with an encrypted checkpoint
+        required: false
+        type: string
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: nyanta-original-core-training
+  cancel-in-progress: false
+env:
+  KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+  OMP_NUM_THREADS: "4"
+  OPENBLAS_NUM_THREADS: "4"
+  TZ: Asia/Tokyo
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 329f20e668f6238ca43df37922bfbee732a856d9
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas==2.2.1 numpy==1.26.4
+      - uses: actions/download-artifact@v4
+        if: ${{ inputs.resume_run_id != '' }}
+        with:
+          name: nyanta-core-checkpoint-${{ inputs.resume_run_id }}
+          run-id: ${{ inputs.resume_run_id }}
+          github-token: ${{ github.token }}
+          path: checkpoint
+      - name: Merge every existing daily archive, no source recollection
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+          GH_TOKEN: ${{ github.token }}
+        run: python -u keirin/scripts/reconstruct_core.py prepare --checkpoint checkpoint/nyanta-core.sqlite.gpg
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-core-checkpoint-${{ github.run_id }}
+          path: checkpoint/*
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 90
+      - name: Preserve encrypted checkpoint durably
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f checkpoint/nyanta-core.sqlite.gpg ]; then
+            tag="nyanta-core-checkpoint-${{ github.run_id }}"
+            gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Encrypted core corpus and aggregate lineage; no keys or plaintext data." || true
+            gh release upload "$tag" checkpoint/* --repo yuhevita-wq/keirin
+          fi
+  train:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [top3, win]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 329f20e668f6238ca43df37922bfbee732a856d9
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: nyanta-core-checkpoint-${{ github.run_id }}
+          path: checkpoint
+      - name: Train original model and evaluate untouched 2026
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: python -u keirin/scripts/reconstruct_core.py train --target ${{ matrix.target }} --checkpoint checkpoint/nyanta-core.sqlite.gpg --report results/core-${{ matrix.target }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-original-core-${{ matrix.target }}-${{ github.run_id }}
+          path: results/*
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Preserve models and evaluation durably
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-core-${{ matrix.target }}-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Original 70-feature Nyanta retraining; encrypted model plus aggregate holdout evaluation."
+          gh release upload "$tag" results/* --repo yuhevita-wq/keirin
