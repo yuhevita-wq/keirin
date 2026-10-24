@@ -1,0 +1,122 @@
+name: Nyanta verified core evaluation
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-verified-evaluation.yml]
+permissions:
+  contents: write
+  actions: read
+env:
+  KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+  OMP_NUM_THREADS: "4"
+  OPENBLAS_NUM_THREADS: "4"
+jobs:
+  await-trained-models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Wait for actual original-model training, refuse failed or provisional models
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import subprocess,json,time
+          for i in range(350):
+              p=subprocess.run(["gh","api","repos/yuhevita-wq/keirin/actions/runs/40050812352"],capture_output=True,check=True)
+              j=json.loads(p.stdout)
+              if j["status"]=="completed":
+                  if j["conclusion"]!="success":
+                      raise SystemExit("Original core training failed; evaluation is blocked.")
+                  break
+              print("Original core training still running",flush=True)
+              time.sleep(30)
+          else:
+              raise SystemExit("Training did not finish within evaluation wait budget.")
+          PY
+  evaluate:
+    needs: await-trained-models
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [top3, win]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 086845380b56fe10601a9b80b0786eaf0ccc5301
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: nyanta-original-core-${{ matrix.target }}-40050812352
+          run-id: 40050812352
+          github-token: ${{ github.token }}
+          path: trained
+      - name: Read verified full corpus
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download nyanta-verified-checkpoint-40052323240 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+      - name: Evaluate saved model on full 2026 without refitting
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+          MODEL_TARGET: ${{ matrix.target }}
+        run: |
+          model=lgbm_wt_eval
+          if [ "$MODEL_TARGET" = win ]; then model=lgbm_wt_win; fi
+          python -u keirin/scripts/reconstruct_core.py evaluate --target "$MODEL_TARGET" --checkpoint checkpoint/nyanta-core.sqlite.gpg --model-artifact "trained/$model.tar.gpg" --report "results/verified-$MODEL_TARGET.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-verified-core-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            results/*.json
+            results/*.gpg
+          if-no-files-found: warn
+      - name: Save verified evaluation and unchanged model durably
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-verified-core-${{ matrix.target }}-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Saved original model; verified full holdout; no model refitting."
+          gh release upload "$tag" results/*.json results/*.gpg --repo yuhevita-wq/keirin
+  compare:
+    needs: await-trained-models
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 086845380b56fe10601a9b80b0786eaf0ccc5301
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nyanta-original-core-*-40050812352
+          run-id: 40050812352
+          github-token: ${{ github.token }}
+          path: trained
+      - name: Read verified full corpus
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download nyanta-verified-checkpoint-40052323240 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+      - name: Compare actual trained raw probabilities with captured original display
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: python -u keirin/scripts/reconstruct_compare.py --checkpoint checkpoint/nyanta-core.sqlite.gpg --models trained --output results/original-display-comparison.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-original-probability-comparison-${{ github.run_id }}
+          path: |
+            results/*.json
+            results/*.gpg
