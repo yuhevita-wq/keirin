@@ -1,0 +1,90 @@
+name: Nyanta native type-lab runtime pilot
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-runtime-pilot.yml]
+permissions:
+  contents: write
+  actions: read
+env:
+  KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+  OMP_NUM_THREADS: "4"
+  OPENBLAS_NUM_THREADS: "4"
+jobs:
+  await-models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Require real trained odds models
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import subprocess,json,time
+          for i in range(450):
+              j=json.loads(subprocess.run(["gh","api","repos/yuhevita-wq/keirin/actions/runs/40055515403"],capture_output=True,check=True).stdout)
+              if j["status"]=="completed":
+                  if j["conclusion"]!="success":raise SystemExit("Original odds training failed; provisional odds prohibited")
+                  break
+              print("Waiting for actual trained seven/nine-car odds",flush=True)
+              time.sleep(30)
+          else:raise SystemExit("Actual odds models not ready")
+          PY
+  replay:
+    needs: await-models
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: f2914dc03b66fef18b24a71f7b2abba0778e2ef5
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2 sqlalchemy alembic
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nyanta-original-input-*-40053833992
+          run-id: 40053833992
+          github-token: ${{ github.token }}
+          path: core-models
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nyanta-odds-tf-*-40055515403
+          run-id: 40055515403
+          github-token: ${{ github.token }}
+          path: odds-models
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nyanta-cup-metadata-*-40054735319
+          run-id: 40054735319
+          github-token: ${{ github.token }}
+          path: cups
+      - name: Read verified actual corpus and existing pilot official payouts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download nyanta-verified-checkpoint-40052323240 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+          gh release download nyanta-official-payouts-40052449816 --repo yuhevita-wq/keirin --pattern '*.gpg' --dir payoffs
+      - name: Original inference, purchase generation, adoption dry-run, official settlement
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: python -u keirin/scripts/reconstruct_runtime.py --checkpoint checkpoint/nyanta-core.sqlite.gpg --core-models core-models --odds-models odds-models --cups cups --payoffs payoffs --from 2026-10-23 --to 2026-10-23 --output results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-runtime-pilot-${{ github.run_id }}
+          path: |
+            results/*.json
+            results/*.gpg
+          if-no-files-found: warn
+      - name: Preserve actual replay results
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-runtime-pilot-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Unchanged original code using genuine learned models. Historical replay, not original morning-asof proof. No external submission."
+          gh release upload "$tag" results/*.json results/*.gpg --repo yuhevita-wq/keirin
