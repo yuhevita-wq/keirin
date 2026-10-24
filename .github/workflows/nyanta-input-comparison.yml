@@ -1,0 +1,40 @@
+name: Nyanta real input card comparison
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-input-comparison.yml]
+permissions:
+  contents: write
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 1e321486101252fd7afaa0e501f3382a8793d193
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Read verified encrypted source corpus
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download nyanta-verified-checkpoint-40052323240 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+      - name: Compare genuine archived input fields
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: python keirin/scripts/reconstruct_input_compare.py --checkpoint checkpoint/nyanta-core.sqlite.gpg --output results/input-comparison.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nyanta-real-input-comparison-${{ github.run_id }}
+          path: results/*.json
+      - name: Preserve actual input comparison
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-real-input-comparison-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Actual archived card fields vs original public capture. Morning-asof equality remains unverified."
+          gh release upload "$tag" results/*.json --repo yuhevita-wq/keirin
