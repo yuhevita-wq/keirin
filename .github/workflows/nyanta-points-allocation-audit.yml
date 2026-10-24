@@ -1,0 +1,51 @@
+name: Nyanta 2026 original point-count and stake-allocation audit
+'on':
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-points-allocation-audit.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/keirin
+          ref: rebuild/nyanta-data-audit
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch existing original-native reconstructed 2026 records and official payouts only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for month in 2026-01 2026-02 2026-03 2026-04 2026-05 2026-06 2026-07 2026-08 2026-09 2026-10; do
+            mkdir -p "inputs/$month"
+            gh release download "nyanta-runtime-$month-40056410288" \
+              --repo yuhevita-wq/keirin \
+              --pattern runtime-rows.json.gpg --pattern runtime-summary.json \
+              --dir "inputs/$month"
+            gh release download "nyanta-official-payoffs-$month-40052849834" \
+              --repo yuhevita-wq/keirin \
+              --pattern "official-payoffs-$month.sqlite.gpg" \
+              --dir "inputs/$month"
+            echo "Monthly encrypted replay and official payout archive ready: $month"
+          done
+      - name: Validate exact official payouts, compare budget-matched allocations and point pruning
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: |
+          python -u scripts/nyanta_points_allocation_audit.py \
+            --inputs inputs \
+            --output results/nyanta-points-allocation-audit-2026.json
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: nyanta-points-allocation-audit-2026-${{ github.run_id }}
+          path: results/nyanta-points-allocation-audit-2026.json
+          if-no-files-found: error
