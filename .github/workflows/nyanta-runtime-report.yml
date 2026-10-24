@@ -1,0 +1,55 @@
+name: Nyanta actual heldout replay aggregation
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-runtime-report.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Require actual completed ten-month native replay
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import subprocess,json,time
+          for i in range(650):
+              j=json.loads(subprocess.run(["gh","api","repos/yuhevita-wq/keirin/actions/runs/40056410288"],capture_output=True,check=True).stdout)
+              if j["status"]=="completed":
+                  if j["conclusion"]!="success":raise SystemExit("Monthly replay failed; no complete aggregate claim")
+                  break
+              print("Waiting for actual completed monthly artifacts",flush=True)
+              time.sleep(30)
+          else:raise SystemExit("Actual replay not complete within report wait budget")
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 7c6bb5192bc620d62c86658903e986439e21185a
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nyanta-runtime-*-40056410288
+          run-id: 40056410288
+          github-token: ${{ github.token }}
+          path: monthly
+      - name: Aggregate actual native outcomes, retaining pending counts
+        run: python keirin/scripts/reconstruct_report.py --results monthly --output results/native-2026-replay.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nyanta-native-2026-report-${{ github.run_id }}
+          path: results/*.json
+      - name: Save reviewable actual aggregate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-native-2026-report-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Actual original-code replay aggregate. Retrospective inputs and 2026-researched system rules prevent a proven morning-asof or wholly unseen-system ROI claim. Pending results retained explicitly."
+          gh release upload "$tag" results/*.json --repo yuhevita-wq/keirin
