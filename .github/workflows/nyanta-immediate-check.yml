@@ -1,0 +1,33 @@
+name: Nyanta immediate schema and decryption check
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-immediate-check.yml]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        month: ['2026-10']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 46d65cb7f4fa743bfb4e0bb79c078965f247be3d
+          persist-credentials: false
+      - name: Audit real encrypted daily SQLite files
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+          GH_TOKEN: ${{ github.token }}
+        run: python keirin/scripts/reconstruct_audit.py --month ${{ matrix.month }} --output reports/nyanta-audit-${{ matrix.month }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-audit-${{ matrix.month }}-${{ github.run_id }}
+          path: reports/nyanta-audit-*.json
+          if-no-files-found: error
