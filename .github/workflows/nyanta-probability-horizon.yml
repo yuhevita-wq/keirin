@@ -1,0 +1,207 @@
+name: Nyanta 70-feature probability training-cutoff diagnostic
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-probability-horizon.yml]
+permissions:
+  contents: read
+  actions: read
+env:
+  KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+  OMP_NUM_THREADS: "4"
+  OPENBLAS_NUM_THREADS: "4"
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [win, top3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: e8252a17e22b95b85b2c143616df4b553eeffb47
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install unchanged original training dependencies
+        run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: nyanta-original-input-${{ matrix.target }}-40053833992
+          run-id: 40053833992
+          github-token: ${{ github.token }}
+          path: baseline
+      - name: Download encrypted verified full corpus
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download nyanta-verified-checkpoint-40052323240 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+      - name: Refit only training cutoff through 2026-08-04; compare actual October display
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+          DIAG_TARGET: ${{ matrix.target }}
+        run: |
+          python - <<'PY'
+          """Single-variable diagnosis: training cutoff. No production model changes."""
+          import gzip
+          import hashlib
+          import json
+          import os
+          import sys
+          import tarfile
+          import tempfile
+          from pathlib import Path
+          
+          import numpy as np
+          
+          repo = Path.cwd()
+          root = repo / "keirin"
+          sys.path.insert(0, str(root))
+          from scripts.reconstruct_core import crypt
+          
+          target = os.environ["DIAG_TARGET"]
+          assert target in ("win", "top3")
+          model_name = "lgbm_wt_win" if target == "win" else "lgbm_wt_eval"
+          checkpoint = repo / "checkpoint" / "nyanta-core.sqlite.gpg"
+          archive = repo / "baseline" / (model_name + ".tar.gpg")
+          assert checkpoint.is_file() and archive.is_file(), "required_real_artifact_missing"
+          
+          from src import database
+          database.DB_PATH = root / "data" / "keirin.db"
+          database.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+          crypt(checkpoint, database.DB_PATH, decrypt=True)
+          
+          model_dir = root / "data" / "models"
+          model_dir.mkdir(parents=True, exist_ok=True)
+          with tempfile.TemporaryDirectory() as directory:
+              plain = Path(directory) / "baseline.tar"
+              crypt(archive, plain, decrypt=True)
+              with tarfile.open(plain) as opened:
+                  names = {model_name + ".pkl", model_name + ".meta.json"}
+                  members = opened.getmembers()
+                  assert {m.name for m in members} == names, "unexpected_saved_model_members"
+                  for member in members:
+                      assert member.isfile(), "invalid_saved_model_member"
+                      src = opened.extractfile(member)
+                      assert src is not None
+                      (model_dir / member.name).write_bytes(src.read())
+          
+          baseline_meta = json.loads((model_dir / (model_name + ".meta.json")).read_text())
+          assert baseline_meta["feature_count"] == 70, "baseline_is_not_70_features"
+          if target == "win":
+              assert baseline_meta["full_refit"] and baseline_meta["to"] == "2025-12-31"
+          else:
+              assert not baseline_meta["full_refit"] and baseline_meta["test_from"] == "2026-01-01"
+          baseline_hash = hashlib.sha256((model_dir / (model_name + ".pkl")).read_bytes()).hexdigest()
+          
+          from src.models.trainer import load_model
+          from scripts.build_type_lab_picks import build_day_features
+          features, X = build_day_features("2026-10-23")
+          assert features is not None and len(X) == len(features), "target_features_missing"
+          assert len(X.columns) == 70, "feature_count_mismatch"
+          feature_keys = [(str(rk), int(fn)) for rk, fn in zip(features.race_key, features.frame_no)]
+          assert len(set(feature_keys)) == len(feature_keys), "duplicate_scoring_keys"
+          key_to_index = {key: i for i, key in enumerate(feature_keys)}
+          
+          reference = json.loads(gzip.decompress(
+              (root / "reconstruction" / "original_reference_20261023.json.gz").read_bytes()
+          ))
+          ref_field = "pred_win_pct" if target == "win" else "pred_top3_pct"
+          expected = []
+          for race in reference["data"]["displayed"]:
+              rk = str(race["race_key"])
+              for entry in race["entries"]:
+                  amount = entry.get(ref_field)
+                  if amount is not None:
+                      expected.append(((rk, int(entry["frame_no"])), float(amount)))
+          assert len(expected) == 592, "reference_count_changed"
+          assert all(k in key_to_index for k, _ in expected), "original_race_missing"
+          indices = np.array([key_to_index[k] for k, _ in expected], dtype=int)
+          true_pct = np.array([amount for _, amount in expected], dtype=float)
+          
+          def measure(probs):
+              selected = np.asarray(probs, dtype=float)[indices] * 100.0
+              delta = selected - true_pct
+              absolute = np.abs(delta)
+              return {
+                  "n": int(len(delta)),
+                  "equal_at_display_precision": int(np.sum(np.round(selected, 1) == true_pct)),
+                  "mean_abs_delta_pp": float(absolute.mean()),
+                  "median_abs_delta_pp": float(np.median(absolute)),
+                  "mean_signed_delta_pp": float(delta.mean()),
+                  "max_abs_delta_pp": float(absolute.max()),
+              }
+          
+          baseline_preds = load_model(model_name).predict_proba(X)[:, 1]
+          baseline_metrics = measure(baseline_preds)
+          
+          from src.cli.main import train_wt
+          alternate_name = model_name + "_cutoff_20260804"
+          if target == "win":
+              settings = dict(
+                  from_date="2023-01-01", to_date="2026-08-04",
+                  test_from=None, test_to=None, full_refit=True
+              )
+          else:
+              settings = dict(
+                  from_date="2023-01-01", to_date=None,
+                  test_from="2026-08-05", test_to="2026-10-23", full_refit=False
+              )
+          train_wt.callback(
+              **settings,
+              save_as=alternate_name,
+              promote=False,
+              target_kind=target,
+              force_overwrite_vintage=False,
+              dnf_weight=1.0,
+          )
+          alternate_meta = json.loads((model_dir / (alternate_name + ".meta.json")).read_text())
+          assert alternate_meta["feature_count"] == 70
+          assert alternate_meta["fit_rows"] > baseline_meta["fit_rows"], "cutoff_did_not_add_real_training_rows"
+          alternate_hash = hashlib.sha256(
+              (model_dir / (alternate_name + ".pkl")).read_bytes()
+          ).hexdigest()
+          assert alternate_hash != baseline_hash, "no_model_change_despite_new_train_rows"
+          alternate_preds = load_model(alternate_name).predict_proba(X)[:, 1]
+          alternate_metrics = measure(alternate_preds)
+          
+          report = {
+              "experiment": "nyanta_unchanged_70_feature_training_cutoff",
+              "target": target,
+              "original_source_commit": "6c30a77612848ba241cd6d2b2a40c957a7c37b51",
+              "fork_source_commit": "e8252a17e22b95b85b2c143616df4b553eeffb47",
+              "original_reference_captured_at": reference.get("captured_at"),
+              "original_issuance_asof_verified": False,
+              "baseline_training": {
+                  "meta": {k: baseline_meta.get(k) for k in ("from", "to", "test_from", "test_to", "full_refit", "n_train_races", "fit_rows", "feature_count")},
+                  "model_sha256": baseline_hash,
+                  "probability_comparison": baseline_metrics,
+              },
+              "alternate_training": {
+                  "cutoff": "2026-08-04",
+                  "meta": {k: alternate_meta.get(k) for k in ("from", "to", "test_from", "test_to", "full_refit", "n_train_races", "fit_rows", "feature_count")},
+                  "model_sha256": alternate_hash,
+                  "probability_comparison": alternate_metrics,
+              },
+              "change_in_mean_abs_delta_pp": alternate_metrics["mean_abs_delta_pp"] - baseline_metrics["mean_abs_delta_pp"],
+              "interpretation": "Only diagnostic. Same original trainer and 70 features. Training cutoff increased; original trained weights still unavailable.",
+              "no_production_model_replacement": True,
+              "row_level_predictions_uploaded": False
+          }
+          out = repo / "results" / ("probability-horizon-" + target + ".json")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+          print("NYANTA_PROBABILITY_HORIZON_SUMMARY=" + json.dumps(
+              {"target": target, "baseline": baseline_metrics, "august_cutoff": alternate_metrics, "fit_rows_before": baseline_meta["fit_rows"], "fit_rows_after": alternate_meta["fit_rows"]},
+              ensure_ascii=False
+          ), flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-probability-horizon-${{ matrix.target }}-${{ github.run_id }}
+          path: results/probability-horizon-*.json
+          if-no-files-found: error
