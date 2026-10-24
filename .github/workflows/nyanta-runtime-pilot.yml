@@ -5,7 +5,7 @@ on:
     paths: [.github/workflows/nyanta-runtime-pilot.yml]
 permissions:
   contents: write
-  actions: read
+  actions: write
 env:
   KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
   OMP_NUM_THREADS: "4"
@@ -15,6 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
+      - name: Replace only superseded waiting pilot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          state=$(gh api repos/yuhevita-wq/keirin/actions/runs/40055865932 --jq .status)
+          if [ "$state" != completed ]; then gh api -X POST repos/yuhevita-wq/keirin/actions/runs/40055865932/cancel; fi
       - name: Require real trained odds models
         env:
           GH_TOKEN: ${{ github.token }}
@@ -38,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: yuhevita-wq/kiseki
-          ref: f2914dc03b66fef18b24a71f7b2abba0778e2ef5
+          ref: f14b65e741b5fd29f01e4717920b6f316604b945
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
