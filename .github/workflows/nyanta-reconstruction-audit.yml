@@ -1,0 +1,54 @@
+name: Nyanta reconstruction source audit
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-reconstruction-audit.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: nyanta-reconstruction-audit
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover only existing encrypted artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/repair_winticket_backups.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-repair-${{ github.run_id }}
+          path: reports/winticket_backup_repair.json
+  audit:
+    needs: repair
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        month: ['2023-01', '2023-02', '2023-03', '2023-04', '2023-05', '2023-06', '2023-07', '2023-08', '2023-09', '2023-10', '2023-11', '2023-12', '2024-01', '2024-02', '2024-03', '2024-04', '2024-05', '2024-06', '2024-07', '2024-08', '2024-09', '2024-10', '2024-11', '2024-12', '2025-01', '2025-02', '2025-03', '2025-04', '2025-05', '2025-06', '2025-07', '2025-08', '2025-09', '2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 46d65cb7f4fa743bfb4e0bb79c078965f247be3d
+          persist-credentials: false
+      - name: Audit real encrypted daily SQLite files
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+          GH_TOKEN: ${{ github.token }}
+        run: python keirin/scripts/reconstruct_audit.py --month ${{ matrix.month }} --output reports/nyanta-audit-${{ matrix.month }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-audit-${{ matrix.month }}-${{ github.run_id }}
+          path: reports/nyanta-audit-*.json
+          if-no-files-found: error
