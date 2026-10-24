@@ -3,9 +3,9 @@
   "covered_from": "2023-01-01",
   "covered_through": "2026-10-23",
   "archived_days_in_checkpoint": 1392,
-  "release_backups_verified": 1349,
-  "release_backups_missing": 12,
-  "release_lookup_errors": 1,
+  "release_backups_verified": 1392,
+  "release_backups_missing": 0,
+  "release_lookup_errors": 0,
   "months": {
     "2023-01": {
       "expected": 31,
@@ -51,15 +51,15 @@
     },
     "2023-07": {
       "expected": 31,
-      "verified": 0,
-      "missing": null,
-      "lookup_error": "release_lookup_failed:training-data-2023-07",
+      "verified": 31,
+      "missing": 0,
+      "lookup_error": null,
       "release_url": "https://github.com/yuhevita-wq/keirin/releases/tag/training-data-2023-07"
     },
     "2023-08": {
       "expected": 31,
-      "verified": 19,
-      "missing": 12,
+      "verified": 31,
+      "missing": 0,
       "lookup_error": null,
       "release_url": "https://github.com/yuhevita-wq/keirin/releases/tag/training-data-2023-08"
     },
@@ -330,14 +330,5 @@
       "release_url": "https://github.com/yuhevita-wq/keirin/releases/tag/training-data-2026-10"
     }
   },
-  "missing_dates_sample": [
-    "2023-08-01",
-    "2023-08-02",
-    "2023-08-03",
-    "2023-08-04",
-    "2023-08-05",
-    "2023-08-06",
-    "2023-08-07",
-    "2023-08-08"
-  ]
+  "missing_dates_sample": []
 }
