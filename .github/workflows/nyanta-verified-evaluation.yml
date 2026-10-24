@@ -2,7 +2,7 @@ name: Nyanta verified core evaluation
 on:
   push:
     branches: [rebuild/nyanta-data-audit]
-    paths: [.github/workflows/nyanta-verified-evaluation.yml]
+    paths: [keirin/reconstruction/eval-run-request.json]
 permissions:
   contents: write
   actions: read
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: yuhevita-wq/kiseki
-          ref: 086845380b56fe10601a9b80b0786eaf0ccc5301
+          ref: 297d383e8b5e7f0702274fbf7843b27f6c252c8e
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -93,7 +93,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: yuhevita-wq/kiseki
-          ref: 086845380b56fe10601a9b80b0786eaf0ccc5301
+          ref: 297d383e8b5e7f0702274fbf7843b27f6c252c8e
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
