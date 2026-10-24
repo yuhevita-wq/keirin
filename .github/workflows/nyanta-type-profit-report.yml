@@ -1,0 +1,48 @@
+name: Nyanta actual type profit report
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-type-profit-report.yml]
+permissions:
+  contents: write
+env:
+  GH_TOKEN: ${{ github.token }}
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: 221f90eca953a64e0ad6563df1fb58a8a488e939
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Reuse actual completed replay records only
+        run: |
+          gh release download nyanta-runtime-pilot-40056158936 --repo yuhevita-wq/keirin --pattern runtime-rows.json.gpg --pattern runtime-summary.json --dir inputs/pilot-2026-10-23
+          python - <<'PY'
+          import subprocess,json
+          jobs=json.loads(subprocess.run(["gh","api","repos/yuhevita-wq/keirin/actions/runs/40056410288/jobs?per_page=100"],capture_output=True,check=True).stdout)["jobs"]
+          for job in jobs:
+              name=job["name"]
+              if name.startswith("replay (") and job["status"]=="completed" and job["conclusion"]=="success":
+                  month=name.removeprefix("replay (").removesuffix(")")
+                  tag=f"nyanta-runtime-{month}-40056410288"
+                  subprocess.run(["gh","release","download",tag,"--repo","yuhevita-wq/keirin","--pattern","runtime-rows.json.gpg","--pattern","runtime-summary.json","--dir",f"inputs/month-{month}"],check=True)
+          PY
+      - name: Decrypt within Actions and reconcile actual type profit
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: python keirin/scripts/reconstruct_type_report.py --inputs inputs --output results/type-profit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nyanta-type-profit-${{ github.run_id }}
+          path: results/type-profit.json
+      - name: Save aggregate figures only
+        run: |
+          tag="nyanta-type-profit-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Actual adopted stakes and official payouts grouped by A-F. Periods separate; pending rows retained, settled-only profit not whole-period profit."
+          gh release upload "$tag" results/type-profit.json --repo yuhevita-wq/keirin
