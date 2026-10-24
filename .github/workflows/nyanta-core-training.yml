@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: yuhevita-wq/kiseki
-          ref: 329f20e668f6238ca43df37922bfbee732a856d9
+          ref: 3c3304f90ee28e3c8760373c157edf8f87eb3402
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: yuhevita-wq/kiseki
-          ref: 329f20e668f6238ca43df37922bfbee732a856d9
+          ref: 3c3304f90ee28e3c8760373c157edf8f87eb3402
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
