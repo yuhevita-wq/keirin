@@ -1,0 +1,120 @@
+name: Nyanta full 2026 native type-lab replay
+on:
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-runtime-holdout.yml]
+permissions:
+  contents: write
+  actions: read
+env:
+  KEIRIN_ALLOW_SQLITE_FALLBACK: "1"
+  OMP_NUM_THREADS: "4"
+  OPENBLAS_NUM_THREADS: "4"
+jobs:
+  await-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Require successful actual native pilot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import subprocess,json,time
+          for i in range(450):
+              j=json.loads(subprocess.run(["gh","api","repos/yuhevita-wq/keirin/actions/runs/40056158936"],capture_output=True,check=True).stdout)
+              if j["status"]=="completed":
+                  if j["conclusion"]!="success":raise SystemExit("Native pilot failed; full replay blocked")
+                  break
+              print("Waiting for successful actual native pilot",flush=True)
+              time.sleep(30)
+          else:raise SystemExit("Pilot not complete within wait budget")
+          PY
+  replay:
+    needs: await-pilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        month: ['2026-01','2026-02','2026-03','2026-04','2026-05','2026-06','2026-07','2026-08','2026-09','2026-10']
+    steps:
+      - name: Wait for matching actual monthly official payout checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MONTH: ${{ matrix.month }}
+        run: |
+          python - <<'PY'
+          import subprocess,json,time,os
+          month=os.environ["MONTH"]
+          for i in range(300):
+              j=json.loads(subprocess.run(["gh","api","repos/yuhevita-wq/keirin/actions/runs/40052849834/jobs?per_page=100"],capture_output=True,check=True).stdout)
+              matches=[x for x in j["jobs"] if x["name"]==f"collect ({month})"]
+              if len(matches)!=1:raise SystemExit("Expected monthly payout job missing")
+              job=matches[0]
+              if job["status"]=="completed":
+                  if job["conclusion"]!="success":raise SystemExit("Monthly payout collector failed; reuse checkpoint when repaired")
+                  break
+              print(f"Waiting for existing actual {month} payouts; no duplicate collection",flush=True)
+              time.sleep(45)
+          else:raise SystemExit("Payout checkpoint not ready")
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: f14b65e741b5fd29f01e4717920b6f316604b945
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r keirin/requirements_vps_slim.txt python-dotenv scikit-learn==1.7.2 sqlalchemy alembic
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nyanta-original-input-*-40053833992
+          run-id: 40053833992
+          github-token: ${{ github.token }}
+          path: core-models
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nyanta-odds-tf-*-40055515403
+          run-id: 40055515403
+          github-token: ${{ github.token }}
+          path: odds-models
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nyanta-cup-metadata-*-40054735319
+          run-id: 40054735319
+          github-token: ${{ github.token }}
+          path: cups
+      - name: Read verified actual corpus and recovered monthly official payouts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MONTH: ${{ matrix.month }}
+        run: |
+          gh release download nyanta-verified-checkpoint-40052323240 --repo yuhevita-wq/keirin --pattern nyanta-core.sqlite.gpg --dir checkpoint
+          gh release download "nyanta-official-payoffs-$MONTH-40052849834" --repo yuhevita-wq/keirin --pattern '*.gpg' --dir payoffs
+      - name: Original inference, purchase generation, adoption dry-run, official settlement
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+          MONTH: ${{ matrix.month }}
+        run: |
+          period=$(python -c 'import os,calendar; y,m=map(int,os.environ["MONTH"].split("-")); last=min(calendar.monthrange(y,m)[1],23) if m==10 else calendar.monthrange(y,m)[1]; print(f"{y:04d}-{m:02d}-01 {y:04d}-{m:02d}-{last:02d}")')
+          read -r first last <<< "$period"
+          python -u keirin/scripts/reconstruct_runtime.py --checkpoint checkpoint/nyanta-core.sqlite.gpg --core-models core-models --odds-models odds-models --cups cups --payoffs payoffs --from "$first" --to "$last" --output results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nyanta-runtime-${{ matrix.month }}-${{ github.run_id }}
+          path: |
+            results/*.json
+            results/*.gpg
+          if-no-files-found: warn
+      - name: Preserve actual replay results
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nyanta-runtime-${{ matrix.month }}-${{ github.run_id }}"
+          gh release create "$tag" --repo yuhevita-wq/keirin --title "$tag" --notes "Unchanged original code using genuine learned models. Historical replay, not original morning-asof proof. No external submission."
+          gh release upload "$tag" results/*.json results/*.gpg --repo yuhevita-wq/keirin
