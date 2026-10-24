@@ -1,0 +1,208 @@
+name: Nyanta original versus reconstructed odds diagnostic
+'on':
+  push:
+    branches: [rebuild/nyanta-data-audit]
+    paths: [.github/workflows/nyanta-odds-original-diff.yml]
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yuhevita-wq/kiseki
+          ref: e8252a17e22b95b85b2c143616df4b553eeffb47
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore existing encrypted native replay; never retrain
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p runtime
+          gh release download nyanta-runtime-pilot-40056158936 --repo yuhevita-wq/keirin --pattern runtime-rows.json.gpg --dir runtime
+      - name: Compare native n7/n9 model odds with captured original odds on matching races and legs
+        env:
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: |
+          python - <<'PY'
+          import gzip
+          import json
+          import math
+          import os
+          import statistics
+          import subprocess
+          import tempfile
+          from collections import defaultdict
+          from pathlib import Path
+
+          original = json.loads(gzip.decompress(
+              Path('keirin/reconstruction/original_reference_20261023.json.gz').read_bytes()))
+          assert len(original['data']['type_lab']['picks']) == 537, 'unexpected_original_reference_size'
+          secret = os.environ.get('COLLECTOR_PASSPHRASE', '')
+          if len(secret) < 32:
+              raise RuntimeError('existing_collector_passphrase_unavailable')
+          with tempfile.TemporaryDirectory(prefix='nyanta-odds-diagnostic-') as t:
+              plaintext = Path(t) / 'runtime.json'
+              p = subprocess.run([
+                  'gpg', '--batch', '--yes', '--pinentry-mode', 'loopback',
+                  '--passphrase-fd', '0', '--no-symkey-cache', '--output',
+                  str(plaintext), '--decrypt', 'runtime/runtime-rows.json.gpg'
+              ], input=secret.encode(), stdout=subprocess.DEVNULL,
+                 stderr=subprocess.PIPE, check=False)
+              if p.returncode:
+                  raise RuntimeError('saved_replay_decryption_failed')
+              runtime = json.loads(plaintext.read_text())
+          if not runtime.get('candidates'):
+              raise RuntimeError('saved_native_candidates_missing')
+
+          def detail(record):
+              legs = record.get('legs') or []
+              if isinstance(legs, str):
+                  legs = json.loads(legs)
+              return legs
+
+          def odds_index(rows, description):
+              prices = defaultdict(list)
+              races = defaultdict(set)
+              skipped = 0
+              for row in rows:
+                  rk = str(row['race_key'])
+                  n = int(row['n_entries'])
+                  if n not in (7, 9):
+                      continue
+                  races[n].add(rk)
+                  for leg in detail(row):
+                      if not isinstance(leg, dict):
+                          skipped += 1
+                          continue
+                      combo = str(leg.get('combo', ''))
+                      odd = leg.get('pred_odds')
+                      if not combo or odd is None:
+                          skipped += 1
+                          continue
+                      try:
+                          value = float(odd)
+                      except (TypeError, ValueError):
+                          skipped += 1
+                          continue
+                      if not math.isfinite(value) or value <= 0:
+                          skipped += 1
+                          continue
+                      prices[(n, rk, combo)].append(value)
+              inconsistent = sum(
+                  max(vals) - min(vals) > 0.01
+                  for vals in prices.values()
+              )
+              if inconsistent:
+                  raise RuntimeError(f'{description}_inconsistent_odds_across_plans={inconsistent}')
+              return {k: statistics.median(v) for k, v in prices.items()}, races, skipped
+
+          orig, orig_races, orig_missing = odds_index(
+              original['data']['type_lab']['picks'], 'original')
+          rebuilt, rebuilt_races, rebuilt_missing = odds_index(
+              runtime['candidates'], 'reconstructed')
+          result = {
+              'reference_captured_at': original['captured_at'],
+              'reconstructed_replay_clock': '2026-10-23 07:20 JST',
+              'same_asof_verified': False,
+              'kind': 'original_captured_plan_pred_odds_vs_reconstructed_native_plan_pred_odds',
+              'full_trifecta_board': False,
+              'comparison_scope': 'Only combinations present in each side’s generated candidate plans, compared by race_key and combo.',
+              'original_plan_rows': len(original['data']['type_lab']['picks']),
+              'reconstructed_plan_rows': len(runtime['candidates']),
+              'seven_nine': {},
+              'omitted_leg_rows': {'original': orig_missing, 'reconstructed': rebuilt_missing}
+          }
+
+          def ranks(values):
+              order = sorted(range(len(values)), key=lambda i: values[i])
+              out = [0.0] * len(values)
+              j = 0
+              while j < len(values):
+                  k = j + 1
+                  while k < len(values) and values[order[k]] == values[order[j]]:
+                      k += 1
+                  v = (j + 1 + k) / 2
+                  for pos in range(j, k):
+                      out[order[pos]] = v
+                  j = k
+              return out
+
+          def spearman(a, b):
+              x = ranks(a)
+              y = ranks(b)
+              mx = statistics.mean(x)
+              my = statistics.mean(y)
+              den = math.sqrt(sum((z-mx)**2 for z in x) * sum((z-my)**2 for z in y))
+              return sum((x[i]-mx)*(y[i]-my) for i in range(len(x))) / den if den else None
+
+          for n in (7, 9):
+              oks = {k for k in orig if k[0] == n}
+              rks = {k for k in rebuilt if k[0] == n}
+              shared = sorted(oks & rks)
+              if not shared:
+                  result['seven_nine'][str(n)] = {'status': 'no_matching_combo',
+                      'original_unique_combos': len(oks), 'reconstructed_unique_combos': len(rks)}
+                  continue
+              logs = [abs(math.log(rebuilt[k] / orig[k])) for k in shared]
+              abs_relative = [abs(rebuilt[k]/orig[k]-1) for k in shared]
+              per_race = defaultdict(list)
+              for k in shared:
+                  per_race[k[1]].append(k)
+              rank_correlations = []
+              top1_equal = []
+              for rk, keys in per_race.items():
+                  if len(keys) < 3:
+                      continue
+                  x = [orig[k] for k in keys]
+                  y = [rebuilt[k] for k in keys]
+                  s = spearman(x, y)
+                  if s is not None:
+                      rank_correlations.append(s)
+                  top1_equal.append(keys[min(range(len(keys)), key=lambda i: x[i])] ==
+                                   keys[min(range(len(keys)), key=lambda i: y[i])])
+              examples = sorted(shared, key=lambda k: abs(math.log(rebuilt[k]/orig[k])), reverse=True)[:8]
+              exact = sum(round(orig[k], 2) == round(rebuilt[k], 2) for k in shared)
+              result['seven_nine'][str(n)] = {
+                  'status': 'compared',
+                  'original_races': len(orig_races.get(n, [])),
+                  'reconstructed_races': len(rebuilt_races.get(n, [])),
+                  'shared_races': len(per_race),
+                  'original_unique_combos': len(oks),
+                  'reconstructed_unique_combos': len(rks),
+                  'matched_unique_combos': len(shared),
+                  'original_coverage_pct': round(100*len(shared)/len(oks), 3),
+                  'reconstructed_coverage_pct': round(100*len(shared)/len(rks), 3),
+                  'exact_2decimal_count': exact,
+                  'exact_2decimal_pct': round(100*exact/len(shared), 3),
+                  'mean_abs_ln_ratio': round(statistics.mean(logs), 6),
+                  'median_abs_ln_ratio': round(statistics.median(logs), 6),
+                  'mean_abs_relative_pct': round(100*statistics.mean(abs_relative), 3),
+                  'within_10pct': round(100*sum(abs(rebuilt[k]/orig[k]-1)<=0.10 for k in shared)/len(shared), 3),
+                  'within_25pct': round(100*sum(abs(rebuilt[k]/orig[k]-1)<=0.25 for k in shared)/len(shared), 3),
+                  'within_2x': round(100*sum(0.5<=rebuilt[k]/orig[k]<=2 for k in shared)/len(shared), 3),
+                  'race_mean_spearman_rank_corr': round(statistics.mean(rank_correlations), 6) if rank_correlations else None,
+                  'race_top1_agree': sum(top1_equal),
+                  'race_top1_comparable': len(top1_equal),
+                  'examples_biggest_differences': [
+                      {'race_key': k[1], 'combo': k[2], 'original': round(orig[k], 2), 'rebuilt': round(rebuilt[k], 2)}
+                      for k in examples
+                  ]
+              }
+          Path('results').mkdir(exist_ok=True)
+          path = Path('results/nyanta-original-odds-difference.json')
+          path.write_text(json.dumps(result, ensure_ascii=False, indent=2)+'\n')
+          print('NYANTA_ORIGINAL_ODDS_COMPARISON=' + json.dumps(result, ensure_ascii=False))
+          if not any(r.get('status') == 'compared' for r in result['seven_nine'].values()):
+              raise RuntimeError('no_actual_same_race_same_combo_comparisons')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: nyanta-original-odds-difference-${{ github.run_id }}
+          path: results/nyanta-original-odds-difference.json
+          if-no-files-found: error
