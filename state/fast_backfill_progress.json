@@ -1,47 +1,47 @@
 {
   "schema_version": 2,
-  "next_date": "2026-11-03",
-  "days_attempted": 1402,
-  "days_archived": 1402,
+  "next_date": "2026-11-04",
+  "days_attempted": 1403,
+  "days_archived": 1403,
   "days_failed": 0,
   "days_partial": 59,
   "failed_dates": [],
   "last_batch": {
-    "from": "2026-11-02",
-    "to": "2026-11-02",
+    "from": "2026-11-03",
+    "to": "2026-11-03",
     "attempted": 1,
     "archived": 1,
-    "partial": 1,
+    "partial": 0,
     "failed": 0,
     "missing_days": [],
     "manual": false,
-    "races": 71,
-    "entries": 508,
-    "results": 493,
-    "odds": 26083,
+    "races": 76,
+    "entries": 536,
+    "results": 524,
+    "odds": 26843,
     "missing_odds_races": 0,
-    "missing_result_races": 1,
+    "missing_result_races": 0,
     "odds_by_bet_type": {
-      "exacta": 3168,
-      "quinella": 1584,
-      "quinellaPlace": 1584,
-      "trifecta": 16926,
-      "trio": 2821
+      "exacta": 3296,
+      "quinella": 1648,
+      "quinellaPlace": 1648,
+      "trifecta": 17358,
+      "trio": 2893
     }
   },
   "metrics_since_2026_10_22_upgrade": {
-    "races": 88811,
-    "entries": 629923,
-    "results": 621137,
-    "odds": 31372370,
+    "races": 88887,
+    "entries": 630459,
+    "results": 621661,
+    "odds": 31399213,
     "missing_odds_races": 145,
     "missing_result_races": 217,
     "odds_by_bet_type": {
-      "exacta": 3870626,
-      "quinella": 1935313,
-      "quinellaPlace": 1935313,
-      "trifecta": 20255244,
-      "trio": 3375874
+      "exacta": 3873922,
+      "quinella": 1936961,
+      "quinellaPlace": 1936961,
+      "trifecta": 20272602,
+      "trio": 3378767
     }
   }
 }
