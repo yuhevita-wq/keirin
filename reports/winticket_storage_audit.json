@@ -1,9 +1,9 @@
 {
   "repository": "yuhevita-wq/keirin",
   "covered_from": "2023-01-01",
-  "covered_through": "2026-11-05",
-  "archived_days_in_checkpoint": 1405,
-  "release_backups_verified": 1405,
+  "covered_through": "2026-11-06",
+  "archived_days_in_checkpoint": 1406,
+  "release_backups_verified": 1406,
   "release_backups_missing": 0,
   "release_lookup_errors": 0,
   "months": {
@@ -330,8 +330,8 @@
       "release_url": "https://github.com/yuhevita-wq/keirin/releases/tag/training-data-2026-10"
     },
     "2026-11": {
-      "expected": 5,
-      "verified": 5,
+      "expected": 6,
+      "verified": 6,
       "missing": 0,
       "lookup_error": null,
       "release_url": "https://github.com/yuhevita-wq/keirin/releases/tag/training-data-2026-11"
