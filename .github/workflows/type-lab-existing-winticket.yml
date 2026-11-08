@@ -1,0 +1,48 @@
+name: Type Lab use existing WINTICKET backups (no new collection)
+on:
+  push:
+    branches: [research/type-lab-existing-wt-20261023]
+    paths:
+      - "research/type_lab_existing/**"
+      - ".github/workflows/type-lab-existing-winticket.yml"
+  pull_request:
+    paths:
+      - "research/type_lab_existing/**"
+      - ".github/workflows/type-lab-existing-winticket.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read-available-encrypted-winticket:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research/type_lab_existing
+          sparse-checkout-cone-mode: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify input script compiles without secrets
+        run: python -m py_compile research/type_lab_existing/reuse_encrypted_winticket.py
+      - name: Read ONLY existing 2023/2024/2025 encrypted Releases, no HTTP scraping
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          python -u research/type_lab_existing/reuse_encrypted_winticket.py \
+            --dates 2023-10-19,2024-10-20,2025-03-21 \
+            --output existing-audit/
+      - name: Preserve owner-encrypted candidate types and aggregate source coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: type-lab-existing-2023-2025-original-source-audit
+          path: existing-audit/
+          retention-days: 30
+          if-no-files-found: warn
+          compression-level: 0
