@@ -1,33 +1,31 @@
 {
   "schema_version": 2,
-  "next_date": "2026-11-14",
-  "days_attempted": 1413,
+  "next_date": "2026-11-15",
+  "days_attempted": 1414,
   "days_archived": 1413,
-  "days_failed": 0,
+  "days_failed": 1,
   "days_partial": 59,
-  "failed_dates": [],
+  "failed_dates": [
+    "2026-11-14"
+  ],
   "last_batch": {
-    "from": "2026-11-13",
-    "to": "2026-11-13",
+    "from": "2026-11-14",
+    "to": "2026-11-14",
     "attempted": 1,
-    "archived": 1,
+    "archived": 0,
     "partial": 0,
-    "failed": 0,
-    "missing_days": [],
+    "failed": 1,
+    "missing_days": [
+      "2026-11-14"
+    ],
     "manual": false,
-    "races": 72,
-    "entries": 509,
-    "results": 505,
-    "odds": 25932,
+    "races": 0,
+    "entries": 0,
+    "results": 0,
+    "odds": 0,
     "missing_odds_races": 0,
     "missing_result_races": 0,
-    "odds_by_bet_type": {
-      "exacta": 3152,
-      "quinella": 1576,
-      "quinellaPlace": 1576,
-      "trifecta": 16824,
-      "trio": 2804
-    }
+    "odds_by_bet_type": {}
   },
   "metrics_since_2026_10_22_upgrade": {
     "races": 89675,
