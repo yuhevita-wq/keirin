@@ -1,22 +1,23 @@
 {
   "schema_version": 2,
-  "next_date": "2026-11-15",
-  "days_attempted": 1414,
+  "next_date": "2026-11-16",
+  "days_attempted": 1415,
   "days_archived": 1413,
-  "days_failed": 1,
+  "days_failed": 2,
   "days_partial": 59,
   "failed_dates": [
-    "2026-11-14"
+    "2026-11-14",
+    "2026-11-15"
   ],
   "last_batch": {
-    "from": "2026-11-14",
-    "to": "2026-11-14",
+    "from": "2026-11-15",
+    "to": "2026-11-15",
     "attempted": 1,
     "archived": 0,
     "partial": 0,
     "failed": 1,
     "missing_days": [
-      "2026-11-14"
+      "2026-11-15"
     ],
     "manual": false,
     "races": 0,
