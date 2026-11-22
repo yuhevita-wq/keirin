@@ -1,0 +1,77 @@
+name: Type Lab classify currently saved WINTICKET days (no new scraping)
+on:
+  pull_request:
+    paths:
+      - "research/type_lab_existing/reuse_encrypted_winticket.py"
+      - ".github/workflows/type-lab-existing-monthly.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read-only-monthly-original-data:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        month:
+          - 2023-01
+          - 2023-02
+          - 2023-03
+          - 2023-04
+          - 2023-05
+          - 2023-06
+          - 2023-07
+          - 2023-08
+          - 2023-09
+          - 2023-10
+          - 2023-11
+          - 2023-12
+          - 2024-01
+          - 2024-02
+          - 2024-03
+          - 2024-04
+          - 2024-05
+          - 2024-06
+          - 2024-07
+          - 2024-08
+          - 2024-09
+          - 2024-10
+          - 2024-11
+          - 2024-12
+          - 2025-01
+          - 2025-02
+          - 2025-03
+          - 2025-04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            research/type_lab_existing
+          sparse-checkout-cone-mode: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate parser before opening owner secret
+        run: python -m py_compile research/type_lab_existing/reuse_encrypted_winticket.py
+      - name: Read ONLY existing encrypted release days, preserve missing days explicitly
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COLLECTOR_PASSPHRASE: ${{ secrets.COLLECTOR_PASSPHRASE }}
+          MONTH: ${{ matrix.month }}
+        run: |
+          set -euo pipefail
+          python -u research/type_lab_existing/reuse_encrypted_winticket.py \
+            --month "$MONTH" --allow-missing --output "audit/$MONTH/"
+          test -s "audit/$MONTH/existing_winticket_reuse_report.json"
+      - name: Preserve owner-encrypted A-F candidate metadata and nonprivate coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: type-lab-existing-saved-${{ matrix.month }}
+          path: audit/${{ matrix.month }}/
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: warn
